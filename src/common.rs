@@ -1,3 +1,5 @@
+use embedded_hal_async::digital::Wait;
+
 pub trait PortDriver {
     type Error;
 
@@ -60,6 +62,78 @@ pub trait PortDriverPullUp: PortDriver {
     fn set_pull_up(&mut self, mask: u32, enable: bool) -> Result<(), Self::Error>;
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InterruptType {
+    Falling = 1,
+    Rising,
+    Both,
+    High,
+    Low,
+}
+
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Interrupt {
+    Falling(u32, u32),
+    Rising(u32, u32),
+    Both(u32, u32),
+    High(u32, u32),
+    Low(u32, u32),
+}
+
+pub trait PortDriverInterrupts: PortDriver {
+
+    fn fetch_interrupt_state(&mut self) -> Result<(), Self::Error>;
+
+    fn query_pin_change(&mut self, mask: u32) -> u32;
+}
+
+pub trait PortDriverIrqMask: PortDriver {
+    /// Set/clear the interrupt mask of the port expander.
+    fn configure_interrupts(&mut self, interrupt: Interrupt) -> Result<(), Self::Error>;
+}
+
+
+pub trait PortDriverIrqState: PortDriver {
+    /// Read the state of pins from the last interrupt.
+    ///
+    /// This method returns a tuple:
+    /// 1. The mask of pins that actually changed state. Value must be the same that would have
+    ///    been returned by `query_pin_change()`.
+    /// 2. The state of each of the pins in the changed mask.
+    ///
+    /// This method should only query the locally cached values that were retrieved by
+    /// `fetch_interrupt_state()`.
+    ///
+    /// This method should reset the locally cached pin-change status for pins from the mask.
+    fn query_interrupt_state(&mut self, mask: u32, int_type: InterruptType) -> Interrupt;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputDrive {
+    ActiveLow,
+    ActiveHigh,
+    OpenDrain
+}
+
+pub trait PortDriverExtI: PortDriverInterrupts + PortDriverIrqState + PortDriverIrqMask {
+    fn configure_int_pin(&mut self, mask: u8, drive: OutputDrive) -> Result<(), Self::Error>;
+
+    
+}
+
+pub trait ExtIPin: Wait {
+    type BusError: From<<Self as embedded_hal::digital::ErrorType>::Error>;
+}
+
+impl <T, E> ExtIPin for T
+where 
+    T: Wait<Error = E>,
+{
+    type BusError = E;
+}
+
+
 /// Pin Modes
 pub mod mode {
     /// Trait for pin-modes which can be used to set a logic level.
@@ -79,4 +153,5 @@ pub mod mode {
     pub struct QuasiBidirectional;
     impl HasInput for QuasiBidirectional {}
     impl HasOutput for QuasiBidirectional {}
+
 }

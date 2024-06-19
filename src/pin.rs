@@ -1,5 +1,8 @@
 use core::marker::PhantomData;
 use embedded_hal::digital::{self as hal_digital, ErrorType};
+use embedded_hal_async::digital::Wait;
+
+use crate::{Interrupt, InterruptType};
 
 /// Representation of a port-expander pin.
 ///
@@ -40,6 +43,8 @@ where
         self.port_driver.lock(|pd| f(pd))
     }
 }
+
+
 
 /// Error type for [`Pin`] which implements [`embedded_hal::digital::Error`].
 #[derive(Debug)]
@@ -288,5 +293,159 @@ where
 
     fn toggle(&mut self) -> Result<(), Self::Error> {
         Pin::toggle(self)
+    }
+}
+
+impl<'a, MODE: crate::mode::HasInput, MUTEX, PD> Pin<'a, MODE, MUTEX>
+where
+    PD: crate::PortDriver + crate::PortDriverInterrupts,
+    MUTEX: crate::PortMutex<Port = PD>,
+{
+    pub fn fetch_all_interrupt_state(&self) -> Result<(), PD::Error> {
+        self.port_driver.lock(|drv| drv.fetch_interrupt_state())
+    }
+
+    pub fn query_pin_change(&mut self) -> bool {
+        self.port_driver
+            .lock(|drv| drv.query_pin_change(self.pin_mask) & self.pin_mask != 0)
+    }
+}
+
+impl<'a, MODE: crate::mode::HasInput, MUTEX, PD> Pin<'a, MODE, MUTEX>
+where
+    PD: crate::PortDriver + crate::PortDriverIrqState,
+    MUTEX: crate::PortMutex<Port = PD>,
+{
+    pub fn query_interrupt_state(&mut self, int_type: InterruptType) -> Option<bool> {
+        self.port_driver.lock(|drv| {
+            let interrupt = drv.query_interrupt_state(self.pin_mask, int_type);
+            match (int_type, interrupt) {
+                (InterruptType::Falling, crate::Interrupt::Falling(pins, state)) if pins & self.pin_mask != 0 => Some(state & self.pin_mask != 0),
+                (InterruptType::Rising, crate::Interrupt::Rising(pins, state)) if pins & self.pin_mask != 0 => Some(state & self.pin_mask != 0),
+                (InterruptType::Both, crate::Interrupt::Both(pins, state)) if pins & self.pin_mask != 0 => Some(state & self.pin_mask != 0),
+                (InterruptType::High, crate::Interrupt::High(pins, state)) if pins & self.pin_mask != 0 => Some(state & self.pin_mask != 0),
+                (InterruptType::Low, crate::Interrupt::Low(pins, state)) if pins & self.pin_mask != 0 => Some(state & self.pin_mask != 0),
+                _ => None
+            }
+        })
+    }
+}
+
+impl<'a, MODE: crate::mode::HasInput, MUTEX, PD> Pin<'a, MODE, MUTEX>
+where
+    PD: crate::PortDriver + crate::PortDriverIrqMask,
+    MUTEX: crate::PortMutex<Port = PD>,
+{
+    /// Add this pin to the interrupt mask of the port expander.
+    pub fn listen(&mut self, int_type: InterruptType) -> Result<(), PD::Error> {
+        let interrupt = match int_type {
+            InterruptType::Falling => crate::Interrupt::Falling(self.pin_mask, 0),
+            InterruptType::Rising => crate::Interrupt::Rising(self.pin_mask, 0),
+            InterruptType::Both => crate::Interrupt::Both(self.pin_mask, 0),
+            InterruptType::High => crate::Interrupt::High(self.pin_mask, 0),
+            InterruptType::Low => crate::Interrupt::Low(self.pin_mask, 0),
+        };
+        self.port_driver
+            .lock(|drv| drv.configure_interrupts(interrupt))
+    }
+
+    /// Remove this pin from the interrupt mask of the port expander.
+    pub fn unlisten(&mut self, int_type: InterruptType) -> Result<(), PD::Error> {
+        let interrupt = match int_type {
+            InterruptType::Falling => crate::Interrupt::Falling(0, self.pin_mask),
+            InterruptType::Rising => crate::Interrupt::Rising(0, self.pin_mask),
+            InterruptType::Both => crate::Interrupt::Both(0, self.pin_mask),
+            InterruptType::High => crate::Interrupt::High(0, self.pin_mask),
+            InterruptType::Low => crate::Interrupt::Low(0, self.pin_mask),
+        };
+        self.port_driver
+            .lock(|drv| drv.configure_interrupts(interrupt))
+    }
+}
+
+pub struct IntPin<'a, MODE, MUTEX, EXTIM> {
+    pub pin: Pin<'a, MODE, MUTEX>,
+    exti: &'a EXTIM,
+}
+
+impl<'a, MODE, MUTEX, PD, EXTI, EXTIM> IntPin<'a, MODE, MUTEX, EXTIM>
+where
+    PD: crate::PortDriver,
+    EXTI: crate::common::ExtIPin,
+    MUTEX: crate::PortMutex<Port = PD>,
+    EXTIM: crate::PortMutex<Port = EXTI>,
+{
+    pub(crate) fn new(pin_number: u8, port_driver: &'a MUTEX, exti: &'a EXTIM) -> Self {
+        assert!(pin_number < 32);
+        Self {
+            pin: Pin::new(pin_number, port_driver),
+            exti
+        }
+    }
+
+    pub fn pin_mask(&self) -> u32 {
+        self.pin.pin_mask
+    }
+
+    pub(crate) fn port_driver(&self) -> &MUTEX {
+        self.pin.port_driver
+    }
+
+    pub fn access_port_driver<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut PD) -> R,
+    {
+        self.pin.port_driver.lock(|pd| f(pd))
+    }
+
+    pub(crate) fn exti_pin(&self) -> &EXTIM {
+        self.exti
+    }
+
+    pub fn access_exti_pin<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut EXTI) -> R,
+    {
+        self.exti.lock(|exti| f(exti))
+    }
+}
+
+impl <'a, MODE, MUTEX, PD, EXTI, EXTIM> ErrorType for IntPin<'a, MODE, MUTEX, EXTIM>
+where
+    PD: crate::PortDriverExtI,
+    PD::Error: core::fmt::Debug,
+    EXTI: crate::common::ExtIPin,
+    EXTIM: crate::PortMutex<Port = EXTI>,
+    MUTEX: crate::PortMutex<Port = PD>,
+{
+    type Error = PinError<PD::Error>;
+}
+
+impl <'a, MODE, MUTEX, PD, EXTI, EXTIM> Wait for  IntPin<'a, MODE, MUTEX, EXTIM>
+where
+    PD: crate::PortDriverExtI,
+    PD::Error: core::fmt::Debug,
+    EXTI: crate::common::ExtIPin,
+    MUTEX: crate::PortMutex<Port = PD>,
+    EXTIM: crate::PortMutex<Port = EXTI>,
+{
+    async fn wait_for_high(&mut self) -> Result<(), Self::Error> {
+        
+    }
+
+    async fn wait_for_low(&mut self) -> Result<(), Self::Error> {
+        todo!()
+    }
+
+    async fn wait_for_rising_edge(&mut self) -> Result<(), Self::Error> {
+        todo!()
+    }
+
+    async fn wait_for_falling_edge(&mut self) -> Result<(), Self::Error> {
+        todo!()
+    }
+
+    async fn wait_for_any_edge(&mut self) -> Result<(), Self::Error> {
+        todo!()
     }
 }

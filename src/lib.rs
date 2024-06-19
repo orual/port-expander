@@ -71,6 +71,9 @@ pub use multi::read_multiple;
 pub use multi::write_multiple;
 pub use mutex::PortMutex;
 pub use pin::Pin;
+pub use pin::IntPin;
+pub use common::Interrupt;
+pub use common::InterruptType;
 
 pub(crate) use bus::I2cExt;
 pub(crate) use bus::SpiBus;
@@ -80,6 +83,10 @@ pub(crate) use common::PortDriverPolarity;
 pub(crate) use common::PortDriverPullDown;
 pub(crate) use common::PortDriverPullUp;
 pub(crate) use common::PortDriverTotemPole;
+pub(crate) use common::PortDriverInterrupts;
+pub(crate) use common::PortDriverIrqMask;
+pub(crate) use common::PortDriverIrqState;
+pub(crate) use common::PortDriverExtI;
 
 pub use dev::max7321::Max7321;
 pub use dev::mcp23x17::Mcp23x17;

@@ -430,7 +430,7 @@ where
     EXTIM: crate::PortMutex<Port = EXTI>,
 {
     async fn wait_for_high(&mut self) -> Result<(), Self::Error> {
-        
+        todo!()
     }
 
     async fn wait_for_low(&mut self) -> Result<(), Self::Error> {
